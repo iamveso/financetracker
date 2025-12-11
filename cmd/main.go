@@ -50,13 +50,11 @@ func main() {
 		log.Fatalf("init email service failure: %v\n", err)
 	}
 
-	if err = emailService.Login(ctx, appPassword); err != nil {
-		log.Fatalf("could not log in to email: %v\n", err)
-	}
-
 	handler := handlers.NewHandler(userService, emailService, emailConfig)
 
 	go userService.RegisterUser(context.Background(), email)
+
+	go emailService.ListenForMessages(ctx)
 
 	if err := handler.StartServer(); err != nil {
 		log.Fatalf("Server start failed with error: %v\n", err)

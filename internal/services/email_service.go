@@ -3,7 +3,10 @@ package services
 import (
 	"context"
 	"database/sql"
+	"log"
+	"time"
 
+	idle "github.com/emersion/go-imap-idle"
 	"github.com/emersion/go-imap/client"
 	financetracker "github.com/iamveso/financetracker/db/sqlc"
 )
@@ -11,7 +14,7 @@ import (
 type IEmailService interface {
 	GetRecentMessages(ctx context.Context, count int) error
 	Init(ctx context.Context, password string, imapServer string) error
-	Login(ctx context.Context, password string) error
+	ListenForMessages(ctx context.Context)
 }
 
 type IEmailRepository interface{}
@@ -60,9 +63,42 @@ func (s *EmailServiceImpl) GetRecentMessages(ctx context.Context, count int) err
 }
 
 func (s *EmailServiceImpl) Init(ctx context.Context, password string, imapServer string) error {
+	if err := s.config.Client.Login(s.config.Email, password); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (s *EmailServiceImpl) Login(ctx context.Context, password string) error {
-	return s.config.Client.Login(s.config.Email, password)
+func (s *EmailServiceImpl) ListenForMessages(ctx context.Context) {
+	_, err := s.config.Client.Select("INBOX", true)
+	if err != nil {
+		log.Printf("Error selecting INBOX: %v\n", err)
+		return
+	}
+
+	idleClient := idle.NewClient(s.config.Client)
+
+	updates := make(chan client.Update)
+	s.config.Client.Updates = updates
+
+	for {
+		stop := make(chan struct{})
+		done := make(chan error, 1)
+
+		go func() {
+			done <- idleClient.Idle(stop)
+		}()
+
+		select {
+		case update := <-updates:
+			if _, ok := update.(*client.MailboxUpdate); ok {
+				log.Println("New email arrived!")
+			}
+
+		case <-time.After(28 * time.Minute):
+			close(stop)
+			<-done
+			log.Println("Restarting IDLE to prevent timeout...")
+		}
+	}
 }
